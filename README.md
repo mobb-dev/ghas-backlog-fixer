@@ -1,11 +1,11 @@
-# GitHub CodeQL to MOBB Analysis Pipeline
+# GitHub CodeQL to Mobb Analysis Pipeline
 
-Automated pipeline to process GitHub repositories for CodeQL security analysis and MOBB vulnerability remediation.
+Automated pipeline to process GitHub repositories for CodeQL security analysis and Mobb vulnerability remediation.
 
 ## Features
 
 - **Automated CodeQL Processing**: Fetches latest CodeQL analyses from default branch, and combines into unified SARIF reports
-- **MOBB Integration**: Automatically uploads SARIF files to Mobb platform for automatic security fix generation
+- **Mobb Integration**: Automatically uploads SARIF files to Mobb platform for automatic security fix generation
 - **Batch Processing**: Processes multiple repositories from CSV
 - **Multi-Domain Support**: Works with both GitHub.com and GitHub Enterprise deployments with automatic API endpoint detection
 - **Comprehensive Reporting**: Generates detailed logs, success/failure statistics, and final reports with Mobb URLs for all processed repositories
@@ -15,7 +15,7 @@ Automated pipeline to process GitHub repositories for CodeQL security analysis a
 - **Python 3.7+** with `requests` library
 - **Node.js 20+** (required for Mobb CLI)
 - **GitHub Personal Access Token** with specific permissions (see setup below)
-- **MOBB API Token** from your MOBB account
+- **Mobb API Token** from your Mobb account
 
 ## Setup
 
@@ -41,13 +41,13 @@ Automated pipeline to process GitHub repositories for CodeQL security analysis a
       - **Security events**: Read (to access CodeQL analysis results and SARIF files)
    5. Generate token and copy it
    
-   **MOBB API Token Setup:**
-   - Follow the guide at: https://docs.mobb.ai/mobb-user-docs/administration/access-tokens
+   **Mobb API Token Setup:**
+   - Follow the guide at: https://docs.Mobb.ai/Mobb-user-docs/administration/access-tokens
    
    **Option A: Environment variables (recommended)**
    ```bash
    export GITHUB_PAT="your_github_token"
-   export MOBB_API_TOKEN="your_mobb_token"
+   export Mobb_API_TOKEN="your_Mobb_token"
    ```
    
    **Option B: Configuration file**
@@ -55,7 +55,7 @@ Automated pipeline to process GitHub repositories for CodeQL security analysis a
    # Edit config.json with your actual tokens
    {
      "GITHUB_PAT": "your_github_personal_access_token_here",
-     "MOBB_API_TOKEN": "your_mobb_api_token_here"
+     "Mobb_API_TOKEN": "your_Mobb_api_token_here"
    }
    ```
 
@@ -76,14 +76,14 @@ python generate_sarif_from_github_codeql.py
 ```
 
 The pipeline will:
-1. Validate Node.js 20+ and MOBB CLI availability
+1. Validate Node.js 20+ and Mobb CLI availability
 2. Load repository list from `repos.csv`
 3. For each repository:
    - Identify the default branch using GitHub REST API
    - Fetch recent CodeQL analyses for the default branch
    - Select the most recent analysis set (by commit SHA)
    - Download and combine SARIF reports
-   - Run MOBB analysis on the combined SARIF
+   - Run Mobb analysis on the combined SARIF
 4. Generate a comprehensive processing report
 
 ## Output Structure
@@ -102,13 +102,13 @@ batch_output/
 
 - **Continue on failure**: If one repository fails, processing continues with remaining repositories
 - **Comprehensive logging**: All errors and warnings are logged with timestamps
-- **Final report**: Includes success/failure statistics and MOBB URLs for successful analyses
+- **Final report**: Includes success/failure statistics and Mobb URLs for successful analyses
 
 ## Report Format
 
 The final processing report includes:
 - **Summary statistics** (total, successful, failed repositories)
-- **MOBB analysis URLs** for successful runs
+- **Mobb analysis URLs** for successful runs
 - **Detailed results** per repository with status and file paths
 - **Error details** for failed operations
 
@@ -118,9 +118,9 @@ The final processing report includes:
 - Ensure Node.js 20+ is installed
 - Check PATH environment variable includes Node.js
 
-**MOBB CLI errors:**
-- Verify internet connection for `npx mobbdev@latest`
-- Check MOBB API token validity
+**Mobb CLI errors:**
+- Verify internet connection for `npx Mobbdev@latest`
+- Check Mobb API token validity
 
 **GitHub API errors:**
 - Verify GitHub PAT has the required permissions:
