@@ -38,7 +38,7 @@ Automated pipeline to process GitHub repositories for CodeQL security analysis a
    4. Under "Repository permissions", grant:
       - **Contents**: Read (to access repository information)
       - **Metadata**: Read (to read basic repository data)
-      - **Security events**: Read (to access CodeQL analysis results and SARIF files)
+      - **Code scanning alerts**: Read (to access CodeQL analysis results and SARIF files)
    5. Generate token and copy it
    
    **Mobb API Token Setup:**
