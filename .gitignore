@@ -1,2 +1,4 @@
 /temp
 /sarif_files
+config_backup.json
+.vscode/settings.json
