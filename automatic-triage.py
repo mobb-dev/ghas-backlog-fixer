@@ -9,7 +9,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 CONFIG_FILE = 'config.json'
-FIXREPORT_FILE = 'fixreport.csv'
+REPOS_FILE = 'repos.csv'
 OUTPUT_DIR = 'batch_output'
 MOBB_API_BASE = 'https://api.mobb.ai'
 
@@ -168,31 +168,31 @@ def load_config():
 # Input loading
 # ---------------------------------------------------------------------------
 
-def load_fix_report_ids():
-    """Read fix report UUIDs from fixreport.csv (one per line, no header)."""
-    if not os.path.exists(FIXREPORT_FILE):
-        logging.error(f"Fix report file not found: {FIXREPORT_FILE}")
+def load_repo_urls():
+    """Read repository URLs from repos.csv (one per line, no header)."""
+    if not os.path.exists(REPOS_FILE):
+        logging.error(f"Repository file not found: {REPOS_FILE}")
         return None
 
-    ids = []
+    urls = []
     try:
-        with open(FIXREPORT_FILE, 'r', newline='') as f:
+        with open(REPOS_FILE, 'r', newline='') as f:
             reader = csv.reader(f)
             for row in reader:
                 if not row:
                     continue
-                fix_id = row[0].strip()
-                if fix_id:
-                    ids.append(fix_id)
+                url = row[0].strip()
+                if url:
+                    urls.append(url)
     except Exception as e:
-        logging.error(f"Failed to read {FIXREPORT_FILE}: {e}")
+        logging.error(f"Failed to read {REPOS_FILE}: {e}")
         return None
 
-    if not ids:
-        logging.error(f"No fix report IDs found in {FIXREPORT_FILE}.")
+    if not urls:
+        logging.error(f"No repository URLs found in {REPOS_FILE}.")
         return None
 
-    return ids
+    return urls
 
 
 # ---------------------------------------------------------------------------
@@ -206,38 +206,86 @@ def get_mobb_headers(mobb_api_token):
     }
 
 
-def resolve_github_url(fix_report_id, mobb_headers):
+def normalize_url(url):
+    """Normalize a URL for comparison: strip whitespace, trailing slashes, lowercase."""
+    return url.strip().rstrip('/').lower()
+
+
+def fetch_fix_report_id_for_repo(repo_url, mobb_headers):
     """
-    Step 1: Fetch the fix report and extract the GitHub repo URL.
-    Returns a RepoInfo instance or None on failure.
+    Find the most recent active fix report for repo_url using a two-step approach:
+
+      Step A: GET /api/rest/active-reports — returns all non-expired fix reports,
+              already sorted latest → earliest. Extracts the ordered list of IDs.
+
+      Step B: For each ID (latest first), GET /api/rest/fix-reports/{id} to read the
+              repo.originalUrl field. Returns the first ID whose normalised URL matches
+              repo_url. Stops as soon as a match is found to minimise API calls.
+
+    Returns the fix report ID string, or None if not found.
     """
-    url = f"{MOBB_API_BASE}/api/rest/fix-reports/{fix_report_id}"
+    target = normalize_url(repo_url)
+
+    # Step A: fetch all active report IDs ordered latest → earliest
+    active_url = f"{MOBB_API_BASE}/api/rest/active-reports"
     try:
-        response = requests.get(url, headers=mobb_headers, timeout=30)
+        response = requests.get(active_url, headers=mobb_headers, timeout=30)
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as e:
-        logging.error(f"[{fix_report_id}] Failed to fetch fix report: {e}")
+        logging.error(f"[{repo_url}] Failed to fetch active reports: {e}")
         return None
 
     try:
-        fix_reports = data.get('fixReport', [])
-        if not fix_reports:
-            logging.error(f"[{fix_report_id}] 'fixReport' array is empty in response.")
-            return None
-        repo_url = fix_reports[0]['repo']['originalUrl']
-    except (KeyError, IndexError, TypeError) as e:
-        logging.error(f"[{fix_report_id}] Could not parse GitHub URL from fix report response: {e}")
+        active_records = data.get('fixReport', [])
+    except (AttributeError, TypeError) as e:
+        logging.error(f"[{repo_url}] Unexpected active-reports response structure: {e}")
         return None
 
-    try:
-        repo_info = RepoInfo(repo_url)
-    except ValueError as e:
-        logging.error(f"[{fix_report_id}] Invalid GitHub URL '{repo_url}': {e}")
+    if not active_records:
+        logging.warning(f"[{repo_url}] No active fix reports exist in this Mobb account.")
         return None
 
-    logging.info(f"[{fix_report_id}] Resolved GitHub repo: {repo_info.owner_repo} ({repo_info.domain})")
-    return repo_info
+    logging.info(f"[{repo_url}] {len(active_records)} active fix report(s) to search.")
+
+    # Step B: lazily fetch details per ID and return the first URL match
+    details_base = f"{MOBB_API_BASE}/api/rest/fix-reports"
+    for i, record in enumerate(active_records, 1):
+        fix_report_id = record.get('id')
+        if not fix_report_id:
+            continue
+
+        try:
+            resp = requests.get(f"{details_base}/{fix_report_id}", headers=mobb_headers, timeout=30)
+            resp.raise_for_status()
+            detail = resp.json()
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"[{repo_url}] Could not fetch details for {fix_report_id}: {e} — skipping.")
+            continue
+
+        try:
+            fix_reports = detail.get('fixReport', [])
+            if not fix_reports:
+                continue
+            repo_field = fix_reports[0].get('repo') or {}
+            original_url = repo_field.get('originalUrl', '')
+        except (KeyError, IndexError, TypeError):
+            continue
+
+        logging.info(
+            f"[{repo_url}] Checking ({i}/{len(active_records)}) "
+            f"{fix_report_id} -> '{original_url}'"
+        )
+
+        if normalize_url(original_url) == target:
+            logging.info(
+                f"[{repo_url}] Match found: {fix_report_id} "
+                f"(created {record.get('createdOn')})"
+            )
+            return fix_report_id
+
+    logging.warning(f"No active fix report found for repo URL: {repo_url}")
+    return None
 
 
 def resolve_tag_priority(tags):
@@ -403,24 +451,19 @@ def dismiss_github_alert(repo_info, vendor_instance_id, dismissed_reason, dismis
 # Core per-report processing
 # ---------------------------------------------------------------------------
 
-def process_fix_report(fix_report_id, config, dry_run=False):
-    """Orchestrate all 4 steps for a single fix report ID."""
+def process_fix_report(fix_report_id, repo_info, config, dry_run=False):
+    """Orchestrate triage steps for a single fix report ID against a known repo."""
     logging.info(f"{'[DRY RUN] ' if dry_run else ''}Processing fix report: {fix_report_id}")
 
     mobb_headers = get_mobb_headers(config['mobb_api_token'])
     github_headers = get_github_headers(config['github_pat'])
 
-    # Step 1: Resolve GitHub URL
-    repo_info = resolve_github_url(fix_report_id, mobb_headers)
-    if not repo_info:
-        triage_results.add_error(fix_report_id, 'resolve_github_url', 'Failed to resolve GitHub repo URL')
-        return
-
-    # Step 2: Fetch all irrelevant issues
+    # Step 1: Fetch all irrelevant issues
     issues = fetch_all_irrelevant_issues(fix_report_id, mobb_headers)
     if issues is None:
         triage_results.add_error(fix_report_id, 'fetch_issues', 'Failed to fetch issues from Mobb API')
         return
+
 
     if not issues:
         logging.info(f"[{fix_report_id}] No irrelevant issues found — nothing to triage.")
@@ -571,22 +614,40 @@ def main():
     if not config:
         sys.exit(1)
 
-    # Step 2: Load fix report IDs
-    print("2. Loading fix report IDs...")
-    fix_report_ids = load_fix_report_ids()
-    if not fix_report_ids:
+    # Step 2: Load repository URLs
+    print("2. Loading repository URLs...")
+    repo_urls = load_repo_urls()
+    if not repo_urls:
         sys.exit(1)
 
-    print(f"   Found {len(fix_report_ids)} fix report ID(s) to process.")
-    for fid in fix_report_ids:
-        print(f"   - {fid}")
+    print(f"   Found {len(repo_urls)} repository URL(s) to process.")
+    for url in repo_urls:
+        print(f"   - {url}")
 
-    # Step 3: Process each fix report
-    print("\n3. Processing fix reports...")
-    for i, fix_report_id in enumerate(fix_report_ids, 1):
-        print(f"\n[{i}/{len(fix_report_ids)}] Fix report: {fix_report_id}")
+    mobb_headers = get_mobb_headers(config['mobb_api_token'])
+
+    # Step 3: Process each repository
+    print("\n3. Processing repositories...")
+    for i, repo_url in enumerate(repo_urls, 1):
+        print(f"\n[{i}/{len(repo_urls)}] Repository: {repo_url}")
+
+        # Build RepoInfo from the URL
         try:
-            process_fix_report(fix_report_id, config, dry_run=dry_run)
+            repo_info = RepoInfo(repo_url)
+        except ValueError as e:
+            logging.error(f"Invalid repository URL '{repo_url}': {e} — skipping.")
+            continue
+
+        # Discover the most recent active fix report for this repo
+        print(f"   Searching for active fix report...")
+        fix_report_id = fetch_fix_report_id_for_repo(repo_url, mobb_headers)
+        if not fix_report_id:
+            logging.warning(f"No active fix report found for {repo_url} — skipping.")
+            continue
+
+        print(f"   Found fix report: {fix_report_id}")
+        try:
+            process_fix_report(fix_report_id, repo_info, config, dry_run=dry_run)
         except Exception as e:
             triage_results.add_error(fix_report_id, 'general', f"Unexpected error: {e}")
             logging.error(f"Unexpected error processing fix report {fix_report_id}: {e}")
